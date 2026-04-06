@@ -120,13 +120,14 @@ def pytest_runtest_logreport(self, report: TestReport) -> None:
     self.previous_describes = report.describe_hierarchy
 
     if not isinstance(word, tuple):
-        test_name = _get_test_name(report.nodeid)
-        parameters = _get_parametrized_parameters(test_name)
-        docstring_summary = _get_docstring_summary(report, test_name, parameters)
-        markup, test_status = _format_results(report, self.config)
+        test_format = self.config.getini("spec_test_format")
+        if "{docstring}" in test_format:
+            _legacy_docstring_summary_behavior(self, report)
+            return
+        
+        test_result, markup = _format_test_result(report, self.config)
         depth = len(self.current_scopes) or 1
-        _print_test_result(self, test_name, docstring_summary, test_status, markup, depth)
-
+        _print_test_result(self, indent * depth + test_result, markup)
 
 def _is_ignored(nodeid: str, ignore_strings: List[str]) -> bool:
     if ignore_strings:
@@ -227,25 +228,24 @@ def _get_parametrized_parameters(test_name: str) -> str:
     return m.group(0) if m else ""
 
 def _format_container_description(describe: Any, config: Any) -> str:
+    format_variables = {}
     if type(describe) == str:
-        sentence = prettify_description(describe)
-        unit_name = prettify_unit_name(describe)
-        docstring_summary = sentence
+        format_variables["sentence"] = prettify_description(describe)
+        format_variables["unit_name"] = prettify_unit_name(describe)
+        docstring = None
     else:
-        sentence = prettify_description(getattr(describe, "__name__", ""))
-        unit_name = prettify_unit_name(getattr(describe, "__name__", ""))
-        docstring_summary = getattr(describe, "__doc__", None)
-        docstring_summary = (
-            _append_colon(str(docstring_summary).lstrip().split("\n")[0])
-            if docstring_summary
-            else sentence
-        )
+        format_variables["sentence"] = prettify_description(getattr(describe, "__name__", ""))
+        format_variables["unit_name"] = prettify_unit_name(getattr(describe, "__name__", ""))
+        docstring = getattr(describe, "__doc__", None)
 
-    return config.getini("spec_container_format").format(
-        sentence=sentence,
-        unit_name=unit_name,
-        docstring_summary=docstring_summary,
-    )
+    if docstring and config.getini("spec_override_with_docstring"):
+        docstring_override = _append_colon(str(docstring).lstrip().split("\n")[0])
+        # Maybe put format_variables_to_override in a config some day?
+        format_variables_to_override = ["sentence", "unit_name"]
+        for var in format_variables_to_override:
+            format_variables[var] = docstring_override
+
+    return config.getini("spec_container_format").format(**format_variables)
 
 
 def _get_test_name(nodeid: str) -> str:
@@ -279,16 +279,42 @@ def _format_results(report: TestReport, config: Any) -> Tuple[Dict[str, bool], s
         return {"yellow": True}, skipped_indicator
     return {}, ""
 
+def _format_test_result(report: TestReport, config: Any) -> tuple[dict[str, bool], str]:
+    name = _get_test_name(report.nodeid)
+    parameters = _get_parametrized_parameters(name)
+    docstring_summary = _get_docstring_summary(report, name, parameters)[0]
+    markup, result = _format_results(report, config)
+    
+    format_variables = {
+        "result": result,
+        "name": name,
+        "docstring_summary": docstring_summary,
+    }
 
-def _print_test_result(
-    self,
-    test_name: str,
-    docstring_summary: list[str],
-    test_status: str,
-    markup: Dict[str, bool],
-    depth: int,
-) -> None:
+    docstring = getattr(report, "docstring_summary", [])
+    if docstring and config.getini("spec_override_with_docstring"):
+        docstring_override = docstring[0] + parameters
+        # Maybe put format_variables_to_override in a config some day?
+        format_variables_to_override = ["name"]
+        for var in format_variables_to_override:
+            format_variables[var] = docstring_override
+
+    test_result = config.getini("spec_test_format").format(**format_variables)
+    return test_result, markup
+        
+
+def _print_test_result(self, test_result: str, markup: Dict[str, bool]) -> None:
+    self._tw.line()
+    self._tw.write(test_result, **markup)
+
+def _legacy_docstring_summary_behavior(self, report):
+    test_name = _get_test_name(report.nodeid)
+    parameters = _get_parametrized_parameters(test_name)
+    docstring_summary = _get_docstring_summary(report, test_name, parameters)
+    markup, test_status = _format_results(report, self.config)
+    depth = len(self.current_scopes) or 1
     indent = self.config.getini("spec_indent")
+    docstring_indent = indent * (depth + len(test_status))
 
     self._tw.line()
     self._tw.write(
@@ -300,12 +326,8 @@ def _print_test_result(
         ),
         **markup,
     )
-
+    
     for line in docstring_summary[1:]:
-        if line.strip() == "":
-            break
-        self._tw.line()
-        self._tw.write(
-            indent * (depth + len(test_status)) + line.strip(),
-            **markup,
-        )
+        if line.strip() != "":
+            self._tw.line()
+            self._tw.write(docstring_indent + line.strip(), **markup)

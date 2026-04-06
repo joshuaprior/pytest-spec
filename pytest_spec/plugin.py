@@ -41,6 +41,11 @@ def pytest_addoption(parser: Parser) -> None:
         help="The format of the test results when using the spec plugin",
     )
     parser.addini(
+        "spec_override_with_docstring",
+        default=False,
+        help="Override some of the format variables in the container format and test format with the first line of the docstring if it exists", 
+    )
+    parser.addini(
         "spec_success_indicator",
         default="✓",
         help="The indicator displayed when a test passes",

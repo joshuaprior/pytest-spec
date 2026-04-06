@@ -27,6 +27,7 @@ class FakeConfig:
             "spec_header_format": "{module_path}:",
             "spec_container_format": "{sentence}",
             "spec_test_format": "{result} {name}",
+            "spec_override_with_docstring": False,
             "spec_success_indicator": "✓",
             "spec_failure_indicator": "✗",
             "spec_skipped_indicator": "?",
@@ -35,11 +36,9 @@ class FakeConfig:
         }
 
     def getini(self, option):
-        result = self.mapping.get(option, None)
-        if not result:
+        if not option in self.mapping:
             raise TypeError("Option {} is not supported in the test".format(option))
-        return result
-
+        return self.mapping.get(option, None)
 
 class FakeStats:
     def setdefault(self, first, second):
@@ -192,6 +191,16 @@ class TestPatch(unittest.TestCase):
         pytest_runtest_logreport(fake_self, fake_report)
         fake_self._tw.write.assert_has_calls([call("  ✓ Example Demo Camel Case", green=True)])
 
+    def test__pytest_runtest_logreport__overrides_with_docstring_if_available(
+        self,
+    ):
+        fake_self = FakeSelf()
+        fake_self.config.mapping["spec_override_with_docstring"] = True
+        fake_report = FakeReport("Test::Second::test_example_Demo_CamelCase")
+        fake_report.docstring_summary = "my docstring summary"
+        pytest_runtest_logreport(fake_self, fake_report)
+        fake_self._tw.write.assert_has_calls([call("  ✓ my docstring summary", green=True)])
+
     def test__pytest_runtest_logreport__ignores_nodeid_which_matches_ignore_string(
         self,
     ):
@@ -238,33 +247,27 @@ class TestContainerHeirarchey:
 
         fake_self._tw.write.assert_has_calls([call("my_function:")])
 
-    def test__pytest_runtest_logreport__uses_docstring_summary_format_for_container_name(
+    @pytest.mark.parametrize("format_string", ["{sentence}", "{unit_name}"])
+    def test__pytest_runtest_logreport__overrides_container_name_with_docstring_summary_if_available(
         self,
         hirearchey_detection_method,
+        format_string,
     ):
-        if hirearchey_detection_method == "nodeid":
-            pytest.skip("Docstring summary format is not supported when hierarchy is detected by nodeid")
-
         fake_self = FakeSelf()
-        fake_self.config.mapping["spec_container_format"] = "{docstring_summary}"
+        fake_self.config.mapping["spec_container_format"] = format_string
+        fake_self.config.mapping["spec_override_with_docstring"] = True
         nodeid, describe_hierarchy = fake_container_hierarchy(depth=1, withDocsring=True)
-
+        if hirearchey_detection_method == "nodeid": describe_hierarchy = []
+        
         pytest_runtest_logreport(fake_self, FakeReport(nodeid=nodeid, describe_hierarchy=describe_hierarchy))
 
-        fake_self._tw.write.assert_has_calls([call("my function docstring:")])
-
-
-    def test__pytest_runtest_logreport__uses_sentence_format_when_docstring_summary_format_not_available(
-        self, hirearchey_detection_method,
-    ):
-        fake_self = FakeSelf()
-        fake_self.config.mapping["spec_container_format"] = "{docstring_summary}"
-        nodeid, describe_hierarchy = fake_container_hierarchy(depth=1, withDocsring=False)
-        if hirearchey_detection_method == "nodeid": describe_hierarchy = None
-
-        pytest_runtest_logreport(fake_self, FakeReport(nodeid=nodeid, describe_hierarchy=describe_hierarchy))
-
-        fake_self._tw.write.assert_has_calls([call("My function:")])
+        if hirearchey_detection_method == "nodeid":
+            if format_string == "{sentence}":
+                fake_self._tw.write.assert_has_calls([call("My function with docstring:")])
+            else:
+                fake_self._tw.write.assert_has_calls([call("my_function_with_docstring:")]) 
+        else:
+            fake_self._tw.write.assert_has_calls([call("my function docstring:")])
 
     def test__pytest_runtest_logreport__adds_indentation_for_each_nested_container(
         self,
