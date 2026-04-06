@@ -5,7 +5,7 @@
 
 import os
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Generator
 
 from _pytest.config import Config
 from _pytest.main import Session
@@ -22,6 +22,20 @@ BOUNDARIES_REGEXP = re.compile(
     re.VERBOSE,
 )
 
+def iterate_scope_hierarchy(previous: list[str], current: list[str]) -> tuple[int, Generator[str, None, None]]:
+    # Strip off the scopes that are common
+    skipped_count = 0
+    for prev, curr in zip(previous, current):
+        if prev == curr:
+            skipped_count += 1
+        else:
+            break
+
+    # Return the rest of the scopes
+    def generator() -> Generator[str, None, None]:
+        yield from current[skipped_count:]
+
+    return skipped_count, generator()
 
 def pytest_runtest_logstart(self, nodeid: str, location: Tuple[str, int, str]) -> None:
     """Signal the start of running a single test item.
@@ -84,13 +98,12 @@ def pytest_runtest_logreport(self, report: TestReport) -> None:
         self.currentfspath = test_path
         _print_description(self)
 
-    scope_ind = 0
-    for msg in self.current_scopes:
-        if msg not in self.previous_scopes:
-            msg = [indent * scope_ind + prettify_description(msg)]
-            msg = "\n".join(msg)
-            if msg:
-                _print_description(self, msg)
+    scope_ind, scope_heirarchy = iterate_scope_hierarchy(self.previous_scopes, self.current_scopes)
+    for msg in scope_heirarchy:
+        msg = [indent * scope_ind + prettify_description(msg)]
+        msg = "\n".join(msg)
+        if msg:
+            _print_description(self, msg)
         scope_ind += 1
     self.previous_scopes = self.current_scopes
 
