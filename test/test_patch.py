@@ -26,6 +26,7 @@ class FakeConfig:
             "spec_header_format": "{module_path}:",
             "spec_container_format": "{sentence}:",
             "spec_test_format": "{result} {name}",
+            "spec_override_with_docstring": False,
             "spec_success_indicator": "✓",
             "spec_failure_indicator": "✗",
             "spec_skipped_indicator": "?",
@@ -35,7 +36,7 @@ class FakeConfig:
 
     def getini(self, option):
         result = self.mapping.get(option, None)
-        if not result:
+        if not option in self.mapping:
             raise TypeError("Option {} is not supported in the test".format(option))
         return result
 
@@ -218,7 +219,74 @@ class TestPatch(unittest.TestCase):
                 fake_self = FakeSelf()
                 pytest_runtest_logreport(fake_self, FakeReport(f"Test::Second::test_{test_suffix}"))
                 fake_self._tw.write.assert_has_calls([call("Second:"), call(f"  ✓ {expected_result}", green=True)])
+    
+    def test__pytest_runtest_logreport__overrides_test_name_with_docstring(
+        self,
+    ):
+        fake_self = FakeSelf()
+        fake_self.config.mapping["spec_override_with_docstring"] = True
+        fake_report = FakeReport("Test::Second::test_example_docstring_override")
+        fake_report.docstring_summary = ["Should override with docstring"]
+        pytest_runtest_logreport(fake_self, fake_report)
+        fake_self._tw.write.assert_has_calls([call("  ✓ Should override with docstring", green=True)])
 
+    def test__pytest_runtest_logreport__apends_parameters_to_docstring_override_for_parametrized_tests(
+        self,
+    ):
+        fake_self = FakeSelf()
+        fake_self.config.mapping["spec_override_with_docstring"] = True
+        fake_report = FakeReport("Test::Second::test_example_docstring_override[10-20-30]")
+        fake_report.docstring_summary = ["Should override with docstring"]
+        pytest_runtest_logreport(fake_self, fake_report)
+        fake_self._tw.write.assert_has_calls([call("  ✓ Should override with docstring[10-20-30]", green=True)])
+
+    def test__pytest_runtest_logreport__overrides_test_name_with_only_the_first_line_of_the_docstring(
+        self,
+    ):
+        fake_self = FakeSelf()
+        fake_self.config.mapping["spec_override_with_docstring"] = True
+        fake_report = FakeReport("Test::Second::test_example_docstring_override")
+        fake_report.docstring_summary = ["line 1", "ignored line 1", "ignored line 2"]
+        pytest_runtest_logreport(fake_self, fake_report)
+        for args, _ in fake_self._tw.write.call_args_list:
+            assert "ignored" not in args[0]
+
+    def test__pytest_runtest_logreport__does_not_override_test_name_with_docstring_if_docstring_is_not_available(
+        self,
+    ):
+        docstring_summaries = [
+            [""],
+            [None],
+            [],
+            None
+        ]
+        
+        fake_self = FakeSelf()
+        fake_self.config.mapping["spec_override_with_docstring"] = True
+        fake_report = FakeReport("Test::Second::test_example_docstring_override")
+
+        for docstring_summary in docstring_summaries:
+            fake_report.docstring_summary = docstring_summary
+            pytest_runtest_logreport(fake_self, fake_report)
+            fake_self._tw.write.assert_has_calls([call("  ✓ Example docstring override", green=True)])
+            fake_self._tw.write.reset_mock()
+
+    def test__pytest_runtest_logreport__ignores_nodeid_which_matches_ignore_string(
+        self,
+    ):
+        fake_self = FakeSelf()
+        pytest_runtest_logreport(fake_self, FakeReport("Test::FLAKE8"))
+        assert not fake_self._tw.write.mock_calls
+
+    def test__pytest_runtest_logreport__ignores_nodeid_if_multiple_string_ignore_are_provided(
+        self,
+    ):
+        fake_self = FakeSelf()
+        fake_self.config.mapping["spec_ignore"] = "FLAKE8,Something"
+        pytest_runtest_logreport(fake_self, FakeReport("Something"))
+        assert not fake_self._tw.write.called
+
+class TestLegacyDocstringBehavior:
     def test__pytest_runtest_longreport__uses_docstring_summary(self):
         fake_self = FakeSelf()
         fake_self.config.mapping["spec_test_format"] = "{result} {docstring_summary}"
@@ -240,21 +308,6 @@ class TestPatch(unittest.TestCase):
         fake_report.docstring_summary = None
         pytest_runtest_logreport(fake_self, fake_report)
         fake_self._tw.write.assert_has_calls([call("  ✓ Example Demo Camel Case", green=True)])
-
-    def test__pytest_runtest_logreport__ignores_nodeid_which_matches_ignore_string(
-        self,
-    ):
-        fake_self = FakeSelf()
-        pytest_runtest_logreport(fake_self, FakeReport("Test::FLAKE8"))
-        assert not fake_self._tw.write.mock_calls
-
-    def test__pytest_runtest_logreport__ignores_nodeid_if_multiple_string_ignore_are_provided(
-        self,
-    ):
-        fake_self = FakeSelf()
-        fake_self.config.mapping["spec_ignore"] = "FLAKE8,Something"
-        pytest_runtest_logreport(fake_self, FakeReport("Something"))
-        assert not fake_self._tw.write.called
 
 
 if __name__ == "__main__":

@@ -41,6 +41,11 @@ def pytest_addoption(parser: Parser) -> None:
         help="The format of the test results when using the spec plugin",
     )
     parser.addini(
+        "spec_override_with_docstring",
+        default=False,
+        help="Overrides variables in the formats with the first line of the docstring if it exists",
+    )
+    parser.addini(
         "spec_success_indicator",
         default="✓",
         help="The indicator displayed when a test passes",
@@ -89,3 +94,9 @@ def pytest_runtest_makereport(item: Item, call: CallInfo) -> Any:
         report.docstring_summary = str(item.obj.__doc__).lstrip().split("\n")  # type: ignore
     else:
         report.docstring_summary = []
+
+    report.describe_hierarchy = (
+        item.get_describe_function_heirarchy()
+        if hasattr(item, "get_describe_function_heirarchy")
+        else []
+    )

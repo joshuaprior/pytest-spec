@@ -106,13 +106,11 @@ def pytest_runtest_logreport(self, report: TestReport) -> None:
     self.previous_scopes = self.current_scopes
 
     if not isinstance(word, tuple):
-        test_name = _get_test_name(report.nodeid)
-        parameters = _get_parametrized_parameters(test_name)
-        docstring_summary = _get_docstring_summary(report, test_name, parameters)
-        markup, test_status = _format_results(report, self.config)
+        msg = _format_test_result(report, self.config)
         depth = len(self.current_scopes) or 1
-        _print_test_result(self, test_name, docstring_summary, test_status, markup, depth)
-
+        markup = _get_result_markup(report)
+        _print_color_text_line(self, indent * depth + msg, markup)
+        _handle_legacy_docstring_behavior(self, report, indent, depth, markup)
 
 def _is_ignored(nodeid: str, ignore_strings: List[str]) -> bool:
     if ignore_strings:
@@ -183,6 +181,10 @@ def _print_description(self, msg: Optional[str] = None) -> None:
     self._tw.write(msg)
     self._first_triggered = True
 
+def _print_color_text_line(self, text: str, markup: Dict[str, bool]) -> None:
+    self._tw.line()
+    self._tw.write(text, **markup)
+
 
 def _remove_test_container_prefix(nodeid: str) -> str:
     return re.sub("^(Test)|(describe_?)", "", nodeid)
@@ -228,55 +230,62 @@ def _get_test_name(nodeid: str) -> str:
         return "The ({}) {}".format(test_name_parts[0][1:].replace(" ", "_"), test_name_parts[1])
     return test_name
 
-
-def _get_docstring_summary(report: TestReport, test_name: str, parameters: str) -> list[str]:
-    docstring_summary: list[str] = getattr(report, "docstring_summary", [])
-    if docstring_summary:
-        docstring_summary[0] = docstring_summary[0] + parameters
-        return docstring_summary
-    else:
-        return [test_name]
-
-
-def _format_results(report: TestReport, config: Any) -> Tuple[Dict[str, bool], str]:
-    success_indicator = config.getini("spec_success_indicator")
-    failure_indicator = config.getini("spec_failure_indicator")
-    skipped_indicator = config.getini("spec_skipped_indicator")
+def _get_result_indicator(report: TestReport, config: Any) -> str:
     if report.passed:
-        return {"green": True}, success_indicator
+        return config.getini("spec_success_indicator")
     elif report.failed:
-        return {"red": True}, failure_indicator
+        return config.getini("spec_failure_indicator")
     elif report.skipped:
-        return {"yellow": True}, skipped_indicator
-    return {}, ""
+        return config.getini("spec_skipped_indicator")
+    return ""
 
+def _get_result_markup(report: TestReport) -> Dict[str, bool]:
+    if report.passed:
+        return {"green": True}
+    elif report.failed:
+        return {"red": True}
+    elif report.skipped:
+        return {"yellow": True}
+    return {}
 
-def _print_test_result(
-    self,
-    test_name: str,
-    docstring_summary: list[str],
-    test_status: str,
-    markup: Dict[str, bool],
-    depth: int,
-) -> None:
-    indent = self.config.getini("spec_indent")
+def _get_docstring_override(report: TestReport, test_name: str) -> Optional[str]:
+    docstring = getattr(report, "docstring_summary", None)
+    if docstring and docstring[0]:
+        parameters = _get_parametrized_parameters(test_name)
+        return docstring[0] + parameters
+    return None
 
-    self._tw.line()
-    self._tw.write(
-        indent * depth
-        + self.config.getini("spec_test_format").format(
-            result=test_status,
-            name=test_name,
-            docstring_summary=docstring_summary[0],
-        ),
-        **markup,
-    )
+def _format_test_result(report: TestReport, config: Any) -> str:
+    format_string = config.getini("spec_test_format")
+    format_variables = {
+        "result": _get_result_indicator(report, config),
+        "name": _get_test_name(report.nodeid),
+    }
 
-    for line in docstring_summary[1:]:
-        if line.strip() == "":
+    # apply docstring overriding and docstring_summary
+    docstring_override = _get_docstring_override(report, format_variables["name"])
+
+    if config.getini("spec_override_with_docstring"):
+        format_variables["name"] = docstring_override or format_variables["name"]
+
+    if "{docstring_summary}" in format_string:
+        format_variables["docstring_summary"] = docstring_override or format_variables["name"]
+
+    return format_string.format(**format_variables)
+
+def _handle_legacy_docstring_behavior(self, report: TestReport, indent: str, depth: int, markup: Dict[str, bool]) -> None:
+    if "{docstring_summary}" not in self.config.getini("spec_test_format"):
+        return
+    
+    docstring = getattr(report, "docstring_summary", None)
+    if not docstring or len(docstring) < 2:
+        return
+    
+    indicator = _get_result_indicator(report, self.config)
+    indent = indent * (depth + len(indicator))
+    
+    for line in docstring[1:]:
+        msg = line.strip()
+        if not msg:
             break
-        self._tw.line()
-        self._tw.write(
-            indent * (depth + len(test_status)) + line.strip(),
-            **markup,
-        )
+        _print_color_text_line(self, indent + msg, markup)
